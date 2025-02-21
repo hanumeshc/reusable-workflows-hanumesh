@@ -119,6 +119,7 @@ jobs:
                           '{image: $image, imgsha: $imgsha, jobId: $jobId, buildNumber: $buildNumber, gitUrl: $gitUrl, gitCommit: $gitCommit, gitBranch: $gitBranch, jobUrl: $jobUrl, buildTime: $buildTime, buildUser: $buildUser, organization: $organization, applicationTags: $applicationTags}')
           
           PAYLOAD=$(jq -n --arg vhost "/" \
-                          --arg name "${{ inputs.rabbitmq_exchange }}" \
+					  	            --arg name "${{ inputs.rabbitmq_exchange }}" \
                           --argjson properties '{}' \
                           --arg routing_key "${{ inputs.rabbitmq_binding_key }}" \
+                          '{vhost: $vhost, name: $name, properties: $properties, routing_key: $routing_key}')                          
