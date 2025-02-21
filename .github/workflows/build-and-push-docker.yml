@@ -41,4 +41,4 @@ jobs:
 
       - name: Push Docker image to JFrog Artifactory
         run: |
-          docker push "${{ inputs.jfrog_repo_url }}/${{ inputs.image_name }}:latest"
+          docker push "${{ inputs.jfrog_repo_url }}/${{ inputs.image_name }}:$TIMESTAMP"
