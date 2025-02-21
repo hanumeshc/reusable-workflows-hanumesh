@@ -35,7 +35,8 @@ jobs:
 
       - name: Build Docker image
         run: |
-          docker build -t "${{ inputs.jfrog_repo_url }}/${{ inputs.image_name }}:latest" \
+          TIMESTAMP=$(date +%Y%m%d%H%M%S)
+          docker build -t "${{ inputs.jfrog_repo_url }}/${{ inputs.image_name }}:$TIMESTAMP" \
             -f "${{ inputs.dockerfile_path }}" .
 
       - name: Push Docker image to JFrog Artifactory
