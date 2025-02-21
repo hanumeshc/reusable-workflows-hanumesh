@@ -24,6 +24,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Set timestamp variable
+        run: echo "TIMESTAMP=$(date +%Y%m%d%H%M%S)" >> $GITHUB_ENV
+  
       - name: Checkout code
         uses: actions/checkout@v3
 
@@ -35,7 +38,6 @@ jobs:
 
       - name: Build Docker image
         run: |
-          TIMESTAMP=$(date +%Y%m%d%H%M%S)
           docker build -t "${{ inputs.jfrog_repo_url }}/${{ inputs.image_name }}:$TIMESTAMP" \
             -f "${{ inputs.dockerfile_path }}" .
 
