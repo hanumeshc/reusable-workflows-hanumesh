@@ -1,0 +1,183 @@
+name: Docker Image CI
+
+on:
+  workflow_call:
+    inputs:
+      image_tag:
+        description: 'Image tag'
+        required: true
+        type: string
+      registry:
+        description: 'Docker registry'
+        required: true
+        type: string
+      repository:
+        description: 'Docker repository'
+        required: true
+        type: string
+      dockerfile:
+        description: 'Path to Dockerfile'
+        required: false
+        type: string
+        default: './Dockerfile'
+      context:
+        description: 'Docker build context (base folder for the artifact)'
+        required: false
+        type: string
+        default: '.'
+      rabbitmq_url:
+        description: 'RabbitMQ URL'
+        required: true
+        type: string
+      rabbitmq_queue:
+        description: 'RabbitMQ queue'
+        required: true
+        type: string
+      rabbitmq_exchange:
+        description: 'RabbitMQ exchange'
+        required: true
+        type: string
+      rabbitmq_binding_key:
+        description: 'RabbitMQ binding key'
+        required: true
+        type: string
+      org:
+        description: 'Organization name'
+        required: true
+        type: string
+      application_tags:
+        description: 'Application tags'
+        type: string
+    secrets:
+      docker_username:
+        description: 'Docker Hub username'
+        required: true
+      docker_password:
+        description: 'Docker Hub password'
+        required: true
+      rabbitmq_user:
+        description: 'RabbitMQ user'
+        required: true
+      rabbitmq_pass:
+        description: 'RabbitMQ password'
+        required: true
+
+jobs:
+  build_and_push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # Fetch enough history to allow diffing with the previous commit
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.docker_username }}
+          password: ${{ secrets.docker_password }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v2
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          push: true
+          tags: ${{ inputs.registry }}/${{ inputs.repository }}:${{ inputs.image_tag }}
+
+      - name: Pull the image to get the digest
+        run: docker pull ${{ inputs.registry }}/${{ inputs.repository }}:${{ inputs.image_tag }}
+
+      - name: Get the image digest
+        run: echo "IMAGE_SHA=$(docker inspect --format='{{index .RepoDigests 0}}' ${{ inputs.registry }}/${{ inputs.repository }}:${{ inputs.image_tag }} | cut -d':' -f2)" >> $GITHUB_ENV
+
+      - name: Get Repository Metadata
+        run: |
+          echo "Fetching repository metadata"
+          VISIBILITY=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ github.repository }} | jq -r '.visibility')
+          PARENT_REPO=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ github.repository }} | jq -r '.parent.full_name // empty')
+          LICENSE_NAME=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ github.repository }} | jq -r '.license.spdx_id // empty')
+          echo "VISIBILITY=$VISIBILITY" >> $GITHUB_ENV
+          echo "PARENT_REPO=$PARENT_REPO" >> $GITHUB_ENV
+          echo "LICENSE_NAME=$LICENSE_NAME" >> $GITHUB_ENV
+
+      - name: Get Diff Commits
+        run: |
+          if [ $(git rev-list --count HEAD) -gt 1 ]; then
+            DIFF_COMMITS=$(git diff HEAD~1 HEAD)
+          else
+            DIFF_COMMITS=""
+          fi
+          # Use a heredoc to set the environment variable
+          echo "DIFF_COMMITS<<EOF" >> $GITHUB_ENV
+          echo "$DIFF_COMMITS" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Create RabbitMQ Exchange and Queue, and Bind them
+        run: |
+          # Create the exchange
+          curl -u ${{ secrets.rabbitmq_user }}:${{ secrets.rabbitmq_pass }} \
+               -H "Content-Type: application/json" \
+               -X PUT "${{ inputs.rabbitmq_url }}/api/exchanges/%2F/${{ inputs.rabbitmq_exchange }}" \
+               -d '{"type":"direct","durable":true}'
+
+          # Create the queue
+          curl -u ${{ secrets.rabbitmq_user }}:${{ secrets.rabbitmq_pass }} \
+               -H "Content-Type: application/json" \
+               -X PUT "${{ inputs.rabbitmq_url }}/api/queues/%2F/${{ inputs.rabbitmq_queue }}" \
+               -d '{"durable":true}'
+
+          # Bind the queue to the exchange with the binding key
+          curl -u ${{ secrets.rabbitmq_user }}:${{ secrets.rabbitmq_pass }} \
+               -H "Content-Type: application/json" \
+               -X POST "${{ inputs.rabbitmq_url }}/api/bindings/%2F/e/${{ inputs.rabbitmq_exchange }}/q/${{ inputs.rabbitmq_queue }}" \
+               -d '{"routing_key":"${{ inputs.rabbitmq_binding_key }}"}'
+
+      - name: Prepare and Send RabbitMQ Message
+        run: |
+          echo "Sending message to RabbitMQ"
+          
+          DIFF_COMMITS=$(echo "${{ env.DIFF_COMMITS }}" | jq -Rs .)
+          
+          JOB_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "$JOB_URL"
+          TRY="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/${{ github.run_number }}"
+          CLEAN_JOB_URL=$(echo "$TRY" | sed 's/\/[0-9]*$//')
+          echo $CLEAN_JOB_URL
+          
+          MESSAGE=$(jq -n --arg image "${{ inputs.registry }}/${{ inputs.repository }}:${{ inputs.image_tag }}" \
+                          --arg imgsha "sha256:${{ env.IMAGE_SHA }}" \
+                          --arg jobId "${{ github.job }}" \
+                          --arg buildNumber "${{ github.run_number }}" \
+                          --arg gitUrl "${{ github.event.repository.html_url }}" \
+                          --arg gitCommit "${{ github.sha }}" \
+                          --arg gitBranch "${{ github.ref_name }}" \
+                          --arg jobUrl "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+                          --arg buildTime "${{ github.event.repository.updated_at }}" \
+                          --arg buildUser "${{ github.actor }}" \
+                          --arg diffCommits "" \
+                          --arg visibility "${{ env.VISIBILITY }}" \
+                          --arg parentRepo "${{ env.PARENT_REPO }}" \
+                          --arg licenseName "${{ env.LICENSE_NAME }}" \
+                          --arg organization "${{ inputs.org }}" \
+                          --arg imageTag "${{ inputs.image_tag }}" \
+                          --arg workflowName "Use Reusable Workflow" \
+                          --arg applicationTags "${{ inputs.application_tags }}" \
+                          '{image: $image, imageTag: $imageTag, imgsha: $imgsha, jobId: $jobId, buildNumber: $buildNumber, gitUrl: $gitUrl, gitCommit: $gitCommit, gitBranch: $gitBranch, jobUrl: $jobUrl, buildTime: $buildTime, buildUser: $buildUser, diffCommits: $diffCommits, visibility: $visibility, parentRepo: $parentRepo, licenseName: $licenseName, organization: $organization, workflowName: $workflowName, applicationTags: $applicationTags}')
+          
+          PAYLOAD=$(jq -n --arg vhost "/" \
+                          --arg name "${{ inputs.rabbitmq_exchange }}" \
+                          --argjson properties '{}' \
+                          --arg routing_key "${{ inputs.rabbitmq_binding_key }}" \
+                          --arg delivery_mode "2" \
+                          --arg payload "$MESSAGE" \
+                          --arg payload_encoding "string" \
+                          '{vhost: $vhost, name: $name, properties: $properties, routing_key: $routing_key, delivery_mode: $delivery_mode, payload: $payload, payload_encoding: $payload_encoding}')
+          
+          curl -u ${{ secrets.rabbitmq_user }}:${{ secrets.rabbitmq_pass }} \
+              -H "Content-Type: application/json" \
+              -X POST "${{ inputs.rabbitmq_url }}/api/exchanges/%2F/${{ inputs.rabbitmq_exchange }}/publish" \
+              --data-binary "$PAYLOAD" || { echo "Failed to send message"; exit 1; }
