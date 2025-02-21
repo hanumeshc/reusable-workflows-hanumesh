@@ -13,10 +13,37 @@ on:
       jfrog_repo_url:
         required: true
         type: string
+      rabbitmq_url:
+        description: 'RabbitMQ URL'
+        required: true
+        type: string
+      rabbitmq_queue:
+        description: 'RabbitMQ queue'
+        required: true
+        type: string
+      rabbitmq_exchange:
+        description: 'RabbitMQ exchange'
+        required: true
+        type: string
+      rabbitmq_binding_key:
+        description: 'RabbitMQ binding key'
+        required: true
+        type: string
+      org:
+        description: 'Organization name'
+        required: true
+        type: string
+      application_tags:
+        description: 'Application tags'
+        type: string
     secrets:
       JFROG_USERNAME:
         required: true
       JFROG_PASSWORD:
+        required: true
+      rabbitmq_user:
+        required: true
+      rabbitmq_pass:
         required: true
 
 jobs:
@@ -44,3 +71,50 @@ jobs:
       - name: Push Docker image to JFrog Artifactory
         run: |
           docker push "${{ inputs.jfrog_repo_url }}/${{ inputs.image_name }}:$TIMESTAMP"
+
+      - name: Pull the image to get the digest
+        run: docker pull "${{ inputs.jfrog_repo_url }}/${{ inputs.image_name }}:$TIMESTAMP"
+
+      - name: Get the image digest
+        run: echo "IMAGE_SHA=$(docker inspect --format='{{index .RepoDigests 0}}' ${{ inputs.jfrog_repo_url }}/${{ inputs.image_name }}:$TIMESTAMP | cut -d':' -f2)" >> $GITHUB_ENV
+
+      - name: Create RabbitMQ Exchange and Queue, and Bind them
+        run: |
+          curl -u ${{ secrets.rabbitmq_user }}:${{ secrets.rabbitmq_pass }} \
+               -H "Content-Type: application/json" \
+               -X PUT "${{ inputs.rabbitmq_url }}/api/exchanges/%2F/${{ inputs.rabbitmq_exchange }}" \
+               -d '{"type":"direct","durable":true}'
+
+          curl -u ${{ secrets.rabbitmq_user }}:${{ secrets.rabbitmq_pass }} \
+               -H "Content-Type: application/json" \
+               -X PUT "${{ inputs.rabbitmq_url }}/api/queues/%2F/${{ inputs.rabbitmq_queue }}" \
+               -d '{"durable":true}'
+
+          curl -u ${{ secrets.rabbitmq_user }}:${{ secrets.rabbitmq_pass }} \
+               -H "Content-Type: application/json" \
+               -X POST "${{ inputs.rabbitmq_url }}/api/bindings/%2F/e/${{ inputs.rabbitmq_exchange }}/q/${{ inputs.rabbitmq_queue }}" \
+               -d '{"routing_key":"${{ inputs.rabbitmq_binding_key }}"}'
+
+      - name: Send Build Metadata to RabbitMQ
+        run: |
+          echo "Sending message to RabbitMQ"
+          
+          JOB_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MESSAGE=$(jq -n --arg image "${{ inputs.jfrog_repo_url }}/${{ inputs.image_name }}:$TIMESTAMP" \
+                          --arg imgsha "sha256:${{ env.IMAGE_SHA }}" \
+                          --arg jobId "${{ github.job }}" \
+                          --arg buildNumber "${{ github.run_number }}" \
+                          --arg gitUrl "${{ github.event.repository.html_url }}" \
+                          --arg gitCommit "${{ github.sha }}" \
+                          --arg gitBranch "${{ github.ref_name }}" \
+                          --arg jobUrl "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+                          --arg buildTime "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+                          --arg buildUser "${{ github.actor }}" \
+                          --arg organization "${{ inputs.org }}" \
+                          --arg applicationTags "${{ inputs.application_tags }}" \
+                          '{image: $image, imgsha: $imgsha, jobId: $jobId, buildNumber: $buildNumber, gitUrl: $gitUrl, gitCommit: $gitCommit, gitBranch: $gitBranch, jobUrl: $jobUrl, buildTime: $buildTime, buildUser: $buildUser, organization: $organization, applicationTags: $applicationTags}')
+          
+          PAYLOAD=$(jq -n --arg vhost "/" \
+                          --arg name "${{ inputs.rabbitmq_exchange }}" \
+                          --argjson properties '{}' \
+                          --arg routing_key "${{ inputs.rabbitmq_binding_key }}" \
