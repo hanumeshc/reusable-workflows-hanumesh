@@ -1,0 +1,43 @@
+# .github/workflows/build-and-push-docker.yml
+name: Build and Push Docker Image
+
+on:
+  workflow_call:
+    inputs:
+      image_name:
+        required: true
+        type: string
+      dockerfile_path:
+        required: true
+        type: string
+      jfrog_repo_url:
+        required: true
+        type: string
+    secrets:
+      JFROG_USERNAME:
+        required: true
+      JFROG_PASSWORD:
+        required: true
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Log in to JFrog Artifactory
+        run: |
+          echo "${{ secrets.JFROG_PASSWORD }}" | docker login \
+            -u "${{ secrets.JFROG_USERNAME }}" \
+            --password-stdin "${{ inputs.jfrog_repo_url }}"
+
+      - name: Build Docker image
+        run: |
+          docker build -t "${{ inputs.jfrog_repo_url }}/${{ inputs.image_name }}:latest" \
+            -f "${{ inputs.dockerfile_path }}" .
+
+      - name: Push Docker image to JFrog Artifactory
+        run: |
+          docker push "${{ inputs.jfrog_repo_url }}/${{ inputs.image_name }}:latest"
