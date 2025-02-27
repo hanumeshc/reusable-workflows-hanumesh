@@ -67,8 +67,14 @@ jobs:
           curl -L -o ssd-scanner-cli https://github.com/OpsMx/ssd-scanner-cli-public/releases/download/v0.0.49/ssd-scanner-cli-amd64
           chmod +x ssd-scanner-cli
           sudo mv ssd-scanner-cli /usr/local/bin/
+      
+      # Step 7.0: Pre-install Semgrep
+      - name: Pre-install Semgrep
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y semgrep     
 
-      # Step 7: Install Dependencies for Semgrep
+      # Step 7.1: Install Dependencies for Semgrep
       - name: Install Dependencies for Semgrep
         run: |
           ssd-scanner-cli install-deps --scanners=semgrep --debug
