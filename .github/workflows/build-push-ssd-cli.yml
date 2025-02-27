@@ -124,7 +124,7 @@ jobs:
           echo "Repository: ${{ github.repository }}"
           echo "Branch: ${{ github.ref_name }}"
           echo "Build ID: ${{ github.run_id }}"
-          echo "Image: "${{ inputs.jfrog_repo_url }}/${{ inputs.image_name }}":"$TIMESTAMP"
+          echo "Image: ${{ inputs.jfrog_repo_url }}/${{ inputs.image_name }}":"$TIMESTAMP"
           echo "Scan Exit Code: ${{ env.SCAN_EXIT_CODE }}"
           echo ""
           echo "Scan result files:"
