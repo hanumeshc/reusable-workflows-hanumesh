@@ -68,13 +68,7 @@ jobs:
           chmod +x ssd-scanner-cli
           sudo mv ssd-scanner-cli /usr/local/bin/
       
-      # Step 7.0: Pre-install Semgrep
-      - name: Pre-install Semgrep
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y semgrep     
-
-      # Step 7.1: Install Dependencies for Semgrep
+      # Step 7: Install Dependencies for Semgrep
       - name: Install Dependencies for Semgrep
         run: |
           ssd-scanner-cli install-deps --scanners=semgrep --debug
