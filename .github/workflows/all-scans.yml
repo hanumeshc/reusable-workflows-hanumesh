@@ -1,141 +1,404 @@
-# .github/workflows/build-push-ssd-cli.yml
-name: Build and Push Docker Image to Jfrog & call SSD CLI
+name: Comprehensive Security Scan
 
 on:
-  workflow_call:
-    inputs:
-      image_name:
-        required: true
-        type: string
-      dockerfile_path:
-        required: true
-        type: string
-      jfrog_repo_url:
-        required: true
-        type: string
-      context:  # Add this input to match what is passed in ci.yml
-        required: false
-        type: string
-        default: '.'  
-      org:
-        description: 'Organization name'
-        required: true
-        type: string
-      application_tags:
-        description: 'Application tags'
-        type: string
-    secrets:
-      JFROG_USERNAME:
-        required: true
-      JFROG_PASSWORD:
-        required: true
+  push:
+    branches:
+      - main
+
 jobs:
-  build-and-push:
+  security-scan:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Set timestamp variable
-        run: echo "TIMESTAMP=$(date +%Y%m%d%H%M%S)" >> $GITHUB_ENV
-  
-      - name: Checkout code
+      # Checkout repository code
+      - name: Checkout repository code
         uses: actions/checkout@v3
 
-      - name: Log in to JFrog Artifactory
+      # Set up Python (for semgrep installation)
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      # Install Semgrep directly
+      - name: Install Semgrep
         run: |
-          echo "${{ secrets.JFROG_PASSWORD }}" | docker login \
-            -u "${{ secrets.JFROG_USERNAME }}" \
-            --password-stdin "${{ inputs.jfrog_repo_url }}"
+          pip install semgrep==1.50.0
+          semgrep --version
 
-      - name: Build Docker image
-        run: |
-          docker build -t "${{ inputs.jfrog_repo_url }}/${{ inputs.image_name }}:$TIMESTAMP" \
-            -f "${{ inputs.dockerfile_path }}" .
-
-      - name: Push Docker image to JFrog Artifactory
-        run: |
-          docker push "${{ inputs.jfrog_repo_url }}/${{ inputs.image_name }}:$TIMESTAMP"
-
-      - name: Pull the image to get the digest
-        run: docker pull "${{ inputs.jfrog_repo_url }}/${{ inputs.image_name }}:$TIMESTAMP"
-
-      - name: Get the image digest
-        run: echo "IMAGE_SHA=$(docker inspect --format='{{index .RepoDigests 0}}' ${{ inputs.jfrog_repo_url }}/${{ inputs.image_name }}:$TIMESTAMP | cut -d':' -f2)" >> $GITHUB_ENV
-
-      # Step 6: Download SSD Scanner CLI
+      # Download SSD Scanner CLI with specific architecture
       - name: Download SSD Scanner CLI
         run: |
-          curl -L -o ssd-scanner-cli https://github.com/OpsMx/ssd-scanner-cli-public/releases/download/v0.0.49/ssd-scanner-cli-amd64
+          curl -L -o ssd-scanner-cli https://github.com/OpsMx/ssd-scanner-cli-public/releases/download/v0.0.50-alpha7/ssd-scanner-cli-amd64
           chmod +x ssd-scanner-cli
           sudo mv ssd-scanner-cli /usr/local/bin/
-      
-      # Step 7: Install Dependencies for Semgrep
-      - name: Install Dependencies for Semgrep
-        run: |
-          ssd-scanner-cli install-deps --scanners=semgrep --debug
+          # Verify the download
+          ssd-scanner-cli --version || echo "Failed to get version, but continuing"
 
-      # Step 8: Setup Scan Environment
+      # Install other dependencies
+      - name: Install additional dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq bc
+
+      # Check for .env and config files
+      - name: Examine source code structure
+        run: |
+          echo "=== Repository Structure ==="
+          find . -type f | grep -v "/.git/" | sort
+          
+          # Check if .env file exists
+          if [ -f ".env" ]; then
+            echo ".env file found - will be scanned for secrets"
+            # Get number of lines without showing content
+            LINES=$(wc -l < .env)
+            echo ".env contains $LINES lines"
+            
+            # Count potential secret patterns (without revealing content)
+            echo "Lines potentially containing secrets: $(grep -i -E 'key|secret|password|token|credential' .env | wc -l)"
+          else
+            echo ".env file not found"
+          fi
+          
+          # Look for any files that might contain sensitive data
+          echo "=== Potential config/secret files ==="
+          find . -name "*.env*" -o -name "*.yaml" -o -name "*.yml" -o -name "*.conf" -o -name "*.config" -o -name "*.json" -o -name "*.properties" | grep -v "/.git/"
+
+      # Setup Scan Environment with custom persistent directories
       - name: Setup Scan Environment
         run: |
-          SCAN_DIR="/tmp/ssd-scan-results"
-          REPORT_DIR="$(pwd)/scan-results"
+          # Create scan directories that won't be automatically cleaned up
+          CUSTOM_SCAN_DIR="${GITHUB_WORKSPACE}/scan-results-dir"
+          REPORT_DIR="${GITHUB_WORKSPACE}/report-dir"
+          LOG_DIR="${GITHUB_WORKSPACE}/logs-dir"
 
-          sudo rm -rf "$SCAN_DIR" "$REPORT_DIR" || true
-          sudo mkdir -p "$SCAN_DIR" "$REPORT_DIR"
-          sudo chmod -R 777 "$SCAN_DIR" "$REPORT_DIR"
+          mkdir -p "$CUSTOM_SCAN_DIR" "$REPORT_DIR" "$LOG_DIR"
+          chmod -R 777 "$CUSTOM_SCAN_DIR" "$REPORT_DIR" "$LOG_DIR"
 
-          echo "SCAN_DIR=$SCAN_DIR" >> $GITHUB_ENV
+          # The actual scan dir will be in the default location but we'll copy results
+          echo "CUSTOM_SCAN_DIR=$CUSTOM_SCAN_DIR" >> $GITHUB_ENV
+          echo "DEFAULT_SCAN_DIR=/home/runner/.local/bin/ssd-scan-results" >> $GITHUB_ENV
           echo "REPORT_DIR=$REPORT_DIR" >> $GITHUB_ENV
+          echo "LOG_DIR=$LOG_DIR" >> $GITHUB_ENV
 
-      # Step 9: Run All Scanners
-      - name: Run All Scanners
+      # Run Source Code Scans with SSD Scanner CLI
+      - name: Run Source Code Scans
         env:
+          SNYK_API_TOKEN: ${{ secrets.SNYK_API_TOKEN }}
           UPLOAD_URL: ${{ secrets.UPLOAD_URL }}
           SSD_TEAM_TOKEN: ${{ secrets.SSD_TEAM_TOKEN }}
         run: |
-          IMAGE_NAME="${{ inputs.jfrog_repo_url }}/${{ inputs.image_name }}"
-          IMAGE_TAG="$TIMESTAMP"
+          echo "=== Running SOURCE CODE scans with SSD Scanner CLI ==="
           
-          echo "Using Image: $IMAGE_NAME:$IMAGE_TAG"
-          
+          # Run the source code scan with detailed output saved to log file
           ssd-scanner-cli \
-            --scanners=semgrep,openssf,grype \
-            --scanners=codelicensescan,codesecretscan,sbom,imagelicensescan,imagesecretscan \
-            --artifact-type="image" \
-            --artifact-name="$IMAGE_NAME" \
-            --artifact-tag="$IMAGE_TAG" \
-            --snyk-api-token="$SNYK_API_TOKEN" \
-            --upload-url="$UPLOAD_URL" \
-            --ssd-token="$SSD_TEAM_TOKEN" \
+            --scanners=trivy,openssf,semgrep \
+            --trivy-scanners=codelicensescan,codesecretscan \
+            --artifact-type=file \
             --source-code-path="$GITHUB_WORKSPACE" \
             --repository-url="https://github.com/${{ github.repository }}" \
             --branch="${{ github.ref_name }}" \
             --build-id="${{ github.run_id }}" \
-            --offline-mode=false \
-            --debug=true
+            --offline-mode=true \
+            --keep-results=true \
+            --debug=true > ${{ env.LOG_DIR }}/source-code-scan.log 2>&1
+          
+          # Display scan log (last 100 lines only for brevity)
+          echo "=== SSD Scanner CLI Log (last 100 lines) ==="
+          tail -n 100 ${{ env.LOG_DIR }}/source-code-scan.log || echo "Failed to read log file"
+          
+          # Verify and preserve scan results
+          echo "=== Checking for scan results ==="
+          if [ -d "${{ env.DEFAULT_SCAN_DIR }}" ]; then
+            echo "Scan results directory exists at default location"
+            echo "Contents:"
+            find "${{ env.DEFAULT_SCAN_DIR }}" -type f | sort
+            
+            # Copy results to our preserved directory
+            echo "Copying results to persistent location..."
+            cp -r "${{ env.DEFAULT_SCAN_DIR }}"/* "${{ env.CUSTOM_SCAN_DIR }}/" || echo "Failed to copy scan results"
+          else
+            echo "Warning: Default scan results directory not found!"
+            mkdir -p "${{ env.DEFAULT_SCAN_DIR }}"
+          fi
 
-          SCAN_EXIT_CODE=$?
-          echo "SCAN_EXIT_CODE=$SCAN_EXIT_CODE" >> $GITHUB_ENV
+      # Run image scan as a separate step
+      - name: Run Image Scan
+        run: |
+          echo "=== Running IMAGE scan with SSD Scanner CLI ==="
+          
+          # Define image details
+          IMAGE_NAME="ubuntu"
+          IMAGE_TAG="latest"
+          
+          # Run the image scan with detailed output
+          ssd-scanner-cli \
+            --scanners=syft,grype,trivy \
+            --trivy-scanners=sbom,imagelicensescan,imagesecretscan \
+            --artifact-type="image" \
+            --artifact-name="$IMAGE_NAME" \
+            --artifact-tag="$IMAGE_TAG" \
+            --source-code-path="$GITHUB_WORKSPACE" \
+            --repository-url="https://github.com/${{ github.repository }}" \
+            --branch="${{ github.ref_name }}" \
+            --build-id="${{ github.run_id }}" \
+            --offline-mode=true \
+            --keep-results=true \
+            --debug=true > ${{ env.LOG_DIR }}/image-scan.log 2>&1
+          
+          # Display scan log (last 50 lines only for brevity)
+          echo "=== SSD Scanner CLI Image Scan Log (last 50 lines) ==="
+          tail -n 50 ${{ env.LOG_DIR }}/image-scan.log || echo "Failed to read image scan log file"
+          
+          # Copy additional results to our preserved directory
+          echo "Copying image scan results to persistent location..."
+          cp -r "${{ env.DEFAULT_SCAN_DIR }}"/* "${{ env.CUSTOM_SCAN_DIR }}/" || echo "Failed to copy image scan results"
 
-      # Step 10: Print Scan Results if offline mode is enabled
-      - name: Print Scan Results
+      # Debug check - verify preserved scan directory contents
+      - name: Verify scan results
+        run: |
+          echo "=== Verifying scan result preservation ==="
+          echo "Custom scan directory contents:"
+          find "${{ env.CUSTOM_SCAN_DIR }}" -type f | sort || echo "No files found in custom scan directory"
+          echo "Results count: $(find "${{ env.CUSTOM_SCAN_DIR }}" -type f | wc -l)"
+          
+          # Check default location as well
+          echo "Default scan directory contents:"
+          find "${{ env.DEFAULT_SCAN_DIR }}" -type f | sort || echo "No files found in default scan directory"
+          echo "Results count: $(find "${{ env.DEFAULT_SCAN_DIR }}" -type f | wc -l)"
+
+      # Analyze scan results - IMPORTANT: Treat HIGH as CRITICAL for security issues
+      - name: Analyze scan results
         if: always()
         run: |
-          echo "=== Scan Results Summary ==="
-          echo "Repository: ${{ github.repository }}"
-          echo "Branch: ${{ github.ref_name }}"
-          echo "Build ID: ${{ github.run_id }}"
-          echo "Image: ${{ inputs.jfrog_repo_url }}/${{ inputs.image_name }}":"$TIMESTAMP"
-          echo "Scan Exit Code: ${{ env.SCAN_EXIT_CODE }}"
-          echo ""
-          echo "Scan result files:"
-          find $SCAN_DIR -type f -exec echo "File: {}" \;
-
-
-      # Step 13: Check scan status
-      - name: Check scan status
-        if: always()
-        run: |
-          if [ "${{ env.SCAN_EXIT_CODE }}" != "0" ]; then
-            echo "Security scan failed with exit code ${{ env.SCAN_EXIT_CODE }}"
+          echo "=== Analyzing Scan Results ==="
+          
+          # Use our custom scan directory - should have all the copied results
+          SCAN_DIR="${{ env.CUSTOM_SCAN_DIR }}"
+          
+          # Initialize violation counters
+          CRITICAL_VIOLATIONS=0
+          HIGH_VIOLATIONS=0
+          SECRET_FILES=""
+          
+          # List all scan result directories
+          echo "=== Scan Results Directories ==="
+          ls -la $SCAN_DIR || echo "No scan directories found"
+          
+          # Function to get latest scan directory for a scanner type
+          get_latest_scan_dir() {
+            ls -td "${SCAN_DIR}/$1"* 2>/dev/null | head -n1
+          }
+          
+          # Function to report findings - CHANGED to count both HIGH and CRITICAL as severe
+          report_finding() {
+            local type=$1
+            local file=$2
+            local severity=$3
+            local details=$4
+            
+            echo "⚠️ $type Finding"
+            echo "File: $file"
+            echo "Severity: $severity"
+            echo "Details: $details"
+            echo "---"
+            
+            # Count both HIGH and CRITICAL issues that involve secrets
+            if [[ "${severity^^}" == "CRITICAL" ]]; then
+              echo "increment_critical" >> /tmp/critical_violations.txt
+            elif [[ "${severity^^}" == "HIGH" ]]; then
+              # Count HIGH issues as critical for secrets and credentials
+              if [[ "$type" == *"Secret"* ]] || [[ "$details" == *"Key"* ]] || 
+                [[ "$details" == *"Secret"* ]] || [[ "$details" == *"Token"* ]] || 
+                [[ "$details" == *"Password"* ]] || [[ "$details" == *"Credential"* ]]; then
+                # Add to critical count instead of high
+                echo "increment_critical" >> /tmp/critical_violations.txt
+              else
+                echo "increment_high" >> /tmp/high_violations.txt
+              fi
+            fi
+            
+            # Keep track of files with secrets
+            if [[ "$type" == *"Secret"* ]] || [[ "$details" == *"Key"* ]] || 
+              [[ "$details" == *"Secret"* ]] || [[ "$details" == *"Token"* ]] || 
+              [[ "$details" == *"Password"* ]] || [[ "$details" == *"Credential"* ]]; then
+              if [[ -n "$file" && "$file" != "Unknown" ]]; then
+                echo "$file" >> /tmp/secret_files.txt
+              fi
+            fi
+          }
+          
+          # Create temporary files for counting
+          touch /tmp/critical_violations.txt /tmp/high_violations.txt /tmp/secret_files.txt
+          
+          # Check if scan results directory exists
+          if [ ! -d "$SCAN_DIR" ]; then
+            echo "❌ Scan directory not found!"
             exit 1
+          fi
+          
+          # Check Semgrep findings
+          SEMGREP_DIR=$(get_latest_scan_dir "semgrepScan")
+          if [ -n "$SEMGREP_DIR" ]; then
+            echo "Checking Semgrep findings in $SEMGREP_DIR..."
+            
+            # List all files in the directory
+            echo "Semgrep scan directory contents:"
+            ls -la "$SEMGREP_DIR" || echo "Failed to list Semgrep directory"
+            
+            # Look for high/critical severity findings
+            for SEVERITY in "high" "critical"; do
+              FINDINGS_FILES="${SEMGREP_DIR}/findings_*_${SEVERITY}_*_semgrep.json"
+              if ls $FINDINGS_FILES 2>/dev/null 1>&2; then
+                for FILE in $FINDINGS_FILES; do
+                  if [ -f "$FILE" ]; then
+                    echo "Processing $FILE"
+                    echo "File size: $(stat -c %s "$FILE") bytes"
+                    
+                    # Process findings - FIXED: use process substitution to avoid subshell
+                    while read -r finding; do
+                      if [ -n "$finding" ]; then
+                        FILEPATH=$(echo "$finding" | jq -r '.location.file_path // "Unknown"')
+                        RULE_NAME=$(echo "$finding" | jq -r '.rule_name // "Unknown"')
+                        MESSAGE=$(echo "$finding" | jq -r '.rule_message // "Unknown"')
+                        
+                        # Map 'high' to 'HIGH' and 'critical' to 'CRITICAL' for consistency
+                        SEVERITY_UPPER="${SEVERITY^^}"
+                        
+                        report_finding "SAST (Semgrep)" "$FILEPATH" "$SEVERITY_UPPER" "$MESSAGE (Rule: $RULE_NAME)"
+                      fi
+                    done < <(jq -c '.findings[]?' "$FILE" 2>/dev/null)
+                  fi
+                done
+              fi
+            done
+          else
+            echo "No Semgrep findings found."
+          fi
+          
+          # Check Trivy secrets - FIXED: use process substitution instead of pipes
+          TRIVY_DIR=$(get_latest_scan_dir "trivyScan")
+          if [ -n "$TRIVY_DIR" ]; then
+            echo "Checking Trivy findings in $TRIVY_DIR..."
+            
+            # List all files in the directory
+            echo "Trivy scan directory contents:"
+            ls -la "$TRIVY_DIR" || echo "Failed to list Trivy directory"
+            
+            # Check for secrets - the most important part for .env files
+            CODE_SCAN_RESULTS="${TRIVY_DIR}/*_codeScanResult.json"
+            if ls $CODE_SCAN_RESULTS 2>/dev/null 1>&2; then
+              for RESULT_FILE in $CODE_SCAN_RESULTS; do
+                if [ -f "$RESULT_FILE" ]; then
+                  echo "Processing $RESULT_FILE for secrets"
+                  
+                  # Check for secrets in the file
+                  if jq -e '.Results[]? | select(.Secrets != null)' "$RESULT_FILE" > /dev/null 2>&1; then
+                    echo "Found secrets section in results"
+                    
+                    # Process each result with secrets - FIXED: use process substitution
+                    while read -r result; do
+                      if [ -n "$result" ]; then
+                        TARGET=$(echo "$result" | jq -r '.Target // "Unknown"')
+                        echo "Found secrets in target: $TARGET"
+                        
+                        # Fix: Store the TARGET for use with each secret
+                        CURRENT_TARGET="$TARGET"
+                        
+                        # Process each individual secret - FIXED: use process substitution
+                        while read -r secret; do
+                          if [ -n "$secret" ]; then
+                            # Use the TARGET as the file path, not internal value
+                            FILEPATH="$CURRENT_TARGET"
+                            SEVERITY=$(echo "$secret" | jq -r '.Severity // "Unknown"')
+                            TITLE=$(echo "$secret" | jq -r '.Title // "Unknown"')
+                            
+                            # Fix: Always report findings against the target file
+                            report_finding "Secret (Trivy)" "$FILEPATH" "$SEVERITY" "$TITLE"
+                          fi
+                        done < <(echo "$result" | jq -c '.Secrets[]?' 2>/dev/null)
+                      fi
+                    done < <(jq -c '.Results[]? | select(.Secrets != null)' "$RESULT_FILE" 2>/dev/null)
+                  else
+                    echo "No secrets section found in results"
+                  fi
+                fi
+              done
+            else
+              echo "No code scan result files found"
+            fi
+            
+            # Check for license violations - FIXED: use process substitution
+            LICENSE_RESULTS="${TRIVY_DIR}/*_codeLicenseScanResult.json"
+            if ls $LICENSE_RESULTS 2>/dev/null 1>&2; then
+              for FILE in $LICENSE_RESULTS; do
+                if [ -f "$FILE" ]; then
+                  echo "Processing $FILE for license violations"
+                  
+                  while read -r result; do
+                    if [ -n "$result" ]; then
+                      if [[ $result == *"GPL"* ]] || [[ $result == *"AGPL"* ]]; then
+                        FILEPATH=$(echo "$result" | jq -r '.FilePath // "Unknown"')
+                        NAME=$(echo "$result" | jq -r '.Name // "Unknown"')
+                        report_finding "License" "$FILEPATH" "HIGH" "Restricted license detected: $NAME"
+                      fi
+
+                      SEVERITY=$(echo "$result" | jq -r '.Severity // "Unknown"')
+                      if [[ "${SEVERITY^^}" == "HIGH" ]]; then
+                        FILEPATH=$(echo "$result" | jq -r '.FilePath // "Unknown"')
+                        NAME=$(echo "$result" | jq -r '.Name // "Unknown"')
+                        report_finding "License" "$FILEPATH" "HIGH" "Forbidden license: $NAME"
+                      fi
+                    fi
+                  done < <(jq -c '.Results[]? | select(.Licenses != null) | .Licenses[]?' "$FILE" 2>/dev/null)
+                fi
+              done
+            fi
+          else
+            echo "No Trivy findings found."
+          fi
+          
+          # Count the violations from the temporary files
+          CRITICAL_VIOLATIONS=$(cat /tmp/critical_violations.txt 2>/dev/null | wc -l || echo 0)
+          HIGH_VIOLATIONS=$(cat /tmp/high_violations.txt 2>/dev/null | wc -l || echo 0)
+          
+          # Get unique list of files with secrets
+          if [ -f "/tmp/secret_files.txt" ]; then
+            SECRET_FILES=$(sort -u /tmp/secret_files.txt | tr '\n' ',' | sed 's/,$//')
+          fi
+          
+          # Print final summary
+          echo ""
+          echo "=== Security Scan Summary ==="
+          TOTAL_VIOLATIONS=$((CRITICAL_VIOLATIONS + HIGH_VIOLATIONS))
+          echo "Found $TOTAL_VIOLATIONS violation(s):"
+          echo "Critical Violations (including HIGH severity secrets): $CRITICAL_VIOLATIONS"
+          echo "Other High Violations: $HIGH_VIOLATIONS"
+          
+          if [ -n "$SECRET_FILES" ]; then
+            echo "Files with secrets: $SECRET_FILES"
+          fi
+          
+          # Save result for the next step - add GITHUB_OUTPUT for newer GitHub Actions
+          echo "CRITICAL_VIOLATIONS=$CRITICAL_VIOLATIONS" >> $GITHUB_ENV
+          echo "HIGH_VIOLATIONS=$HIGH_VIOLATIONS" >> $GITHUB_ENV
+          echo "critical_violations=$CRITICAL_VIOLATIONS" >> $GITHUB_OUTPUT
+          echo "high_violations=$HIGH_VIOLATIONS" >> $GITHUB_OUTPUT
+
+      # Fail workflow on critical issues (now includes HIGH severity secrets)
+      - name: Check for critical violations
+        if: always()
+        run: |
+          echo "Checking for violations..."
+          echo "Critical violations: ${{ env.CRITICAL_VIOLATIONS }}"
+          echo "High violations: ${{ env.HIGH_VIOLATIONS }}"
+          
+          if [ "${{ env.CRITICAL_VIOLATIONS }}" -gt 0 ]; then
+            echo "❌ Security scan failed due to ${{ env.CRITICAL_VIOLATIONS }} security violations (including HIGH severity secrets)"
+            exit 1
+          else
+            echo "✅ No critical security violations found"
+            if [ "${{ env.HIGH_VIOLATIONS }}" -gt 0 ]; then
+              echo "⚠️ Warning: ${{ env.HIGH_VIOLATIONS }} high severity issues found (not failing the build)"
+            fi
           fi
