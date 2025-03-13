@@ -64,7 +64,7 @@ jobs:
       # Step 6: Download SSD Scanner CLI
       - name: Download SSD Scanner CLI
         run: |
-          curl -L -o ssd-scanner-cli https://github.com/OpsMx/ssd-scanner-cli-public/releases/download/v0.0.50-alpha12/ssd-scanner-cli-arm64
+          curl -L -o ssd-scanner-cli curl -L -o ssd-scanner-cli https://github.com/OpsMx/ssd-scanner-cli-public/releases/download/v0.0.49/ssd-scanner-cli-amd64
           chmod +x ssd-scanner-cli
           sudo mv ssd-scanner-cli /usr/local/bin/
       
