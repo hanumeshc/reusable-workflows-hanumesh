@@ -170,7 +170,8 @@ jobs:
           else
             echo "Warning: Default scan results directory not found!"
             mkdir -p "${{ env.DEFAULT_SCAN_DIR }}"
-
+           fi
+           
       # Run image scan as a separate step
       - name: Run Image Scan
         run: |
