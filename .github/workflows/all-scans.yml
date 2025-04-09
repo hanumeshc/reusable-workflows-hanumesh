@@ -100,10 +100,9 @@ jobs:
       # Download SSD Scanner CLI with specific architecture
       - name: Download SSD Scanner CLI
         run: |
-          curl -L -o ssd-scanner-cli https://github.com/OpsMx/ssd-scanner-cli-public/releases/download/v0.0.50-alpha7/ssd-scanner-cli-amd64
+          curl -L -o ssd-scanner-cli https://github.com/OpsMx/ssd-scanner-cli-public/releases/download/v0.0.50-alpha21/ssd-scanner-cli-amd64
           chmod +x ssd-scanner-cli
           sudo mv ssd-scanner-cli /usr/local/bin/
-          ssd-scanner-cli --version || echo "Failed to get version, but continuing"
 
       # Install other dependencies
       - name: Install additional dependencies
