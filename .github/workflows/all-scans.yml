@@ -54,6 +54,12 @@ on:
         type: string
         default: "v1.0"
     secrets:
+      DOCKER_PUBLIC_USERNAME:
+        description: 'Docker Hub username'
+        required: true
+      DOCKER_PUBLIC_PASSWORD:
+        description: 'Docker Hub password'
+        required: true  
       RABBITMQ_USER:
         description: 'RabbitMQ user'
         required: true
