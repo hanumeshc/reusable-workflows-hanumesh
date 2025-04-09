@@ -57,10 +57,10 @@ on:
     secrets:
       DOCKER_PUBLIC_USERNAME:
         description: 'Docker Hub username'
-        required: true
+        required: false
       DOCKER_PUBLIC_PASSWORD:
         description: 'Docker Hub password'
-        required: true
+        required: false
       RABBITMQ_USER:
         description: 'RabbitMQ user'
         required: true
