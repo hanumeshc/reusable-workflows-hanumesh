@@ -156,8 +156,8 @@ jobs:
       # Run Source Code Scans with SSD Scanner CLI
       - name: Run Source Code Scans
         env:
-          UPLOAD_URL: ${{ secrets.UPLOAD_URL }}        #<--- ENSURE THIS IS USED LATER IN THIS STEP
-          SSD_TEAM_TOKEN: ${{ secrets.SSD_TEAM_TOKEN }}   #<--- ENSURE THIS IS USED LATER IN THIS STEP
+          UPLOAD_URL: ${{ secrets.UPLOAD_URL }}
+          SSD_TEAM_TOKEN: ${{ secrets.SSD_TEAM_TOKEN }}
         run: |
           echo "=== Running SOURCE CODE scans with SSD Scanner CLI ==="
           ssd-scanner-cli \
@@ -166,7 +166,7 @@ jobs:
             --artifact-type="image" \
             --artifact-name="$IMAGE_NAME" \
             --artifact-tag="$IMAGE_TAG" \            
-            --upload-url="${UPLOAD_URL}" \
+            --upload-url="https://march-qa.oea-dev.opsmx.net" \
             --ssd-token="${SSD_TEAM_TOKEN}" \             
             --source-code-path="$GITHUB_WORKSPACE" \           
             --repository-url="https://github.com/${{ github.repository }}" \
