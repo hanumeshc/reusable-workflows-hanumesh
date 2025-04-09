@@ -54,10 +54,10 @@ on:
         type: string
         default: "v1.0"
     secrets:
-      RABBITMQ_USER: # KEEP THIS IF IT'S USED
+      RABBITMQ_USER:
         description: 'RabbitMQ user'
         required: true
-      RABBITMQ_PASS: # KEEP THIS IF IT'S USED
+      RABBITMQ_PASS:
         description: 'RabbitMQ password'
         required: true
       SNYK_API_TOKEN:
@@ -137,9 +137,9 @@ jobs:
       # Run Source Code Scans with SSD Scanner CLI
       - name: Run Source Code Scans
         env:
-          SNYK_API_TOKEN: ${{ secrets.SNYK_API_TOKEN }} # Make sure this is actually used!
-          UPLOAD_URL: ${{ secrets.UPLOAD_URL }}       # Make sure this is actually used!
-          SSD_TEAM_TOKEN: ${{ secrets.SSD_TEAM_TOKEN }}  # Make sure this is actually used!
+          SNYK_API_TOKEN: ${{ secrets.SNYK_API_TOKEN }}  #<--- ENSURE THIS IS USED LATER IN THIS STEP
+          UPLOAD_URL: ${{ secrets.UPLOAD_URL }}        #<--- ENSURE THIS IS USED LATER IN THIS STEP
+          SSD_TEAM_TOKEN: ${{ secrets.SSD_TEAM_TOKEN }}   #<--- ENSURE THIS IS USED LATER IN THIS STEP
         run: |
           echo "=== Running SOURCE CODE scans with SSD Scanner CLI ==="
           ssd-scanner-cli \
@@ -165,14 +165,13 @@ jobs:
           else
             echo "Warning: Default scan results directory not found!"
             mkdir -p "${{ env.DEFAULT_SCAN_DIR }}"
-          fi
 
       # Run image scan as a separate step
       - name: Run Image Scan
         run: |
           echo "=== Running IMAGE scan with SSD Scanner CLI ==="
-          IMAGE_NAME="ubuntu"
-          IMAGE_TAG="latest"
+          IMAGE_NAME="${{ inputs.image_name }}" # Using the input
+          IMAGE_TAG="${{ inputs.image_tag }}"  # Using the input
           ssd-scanner-cli \
             --scanners=syft,grype,trivy \
             --trivy-scanners=sbom,imagelicensescan,imagesecretscan \
@@ -200,9 +199,20 @@ jobs:
           echo "Results count: $(find "${{ env.CUSTOM_SCAN_DIR }}" -type f | wc -l)"
           echo "Default scan directory contents:"
           find "${{ env.DEFAULT_SCAN_DIR }}" -type f | sort || echo "No files found in default scan directory"
-          echo "Results count: $(find "${{ env.DEFAULT_SCAN_DIR }}" -type f | wc -l)"... # Analyze scan results
-      - name: Analyze scan results
+          echo "Results count: $(find "${{ env.DEFAULT_SCAN_DIR }}" -type f | wc -l)"
+
+      # Example: Construct RabbitMQ URL (if needed for notification)
+      - name: Construct RabbitMQ URL  #<--- IF YOU NEED THIS, UNCOMMENT AND ADAPT
+        run: |
+          RABBITMQ_URL="amqp://${{ secrets.RABBITMQ_USER }}:${{ secrets.RABBITMQ_PASS }}@${{ inputs.rabbitmq_url }}" #<---EXAMPLE
+          echo "RabbitMQ URL: $RABBITMQ_URL" #DEBUG
+          echo "RABBITMQ_URL=$RABBITMQ_URL" >> $GITHUB_ENV #SET ENV VAR IF NEEDED
+
+      # Analyze scan results (EXAMPLE USAGE of UPLOAD_URL)
+      - name: Analyze scan results  #<---EXAMPLE USAGE
         if: always()
+        env:
+          UPLOAD_URL: ${{ secrets.UPLOAD_URL }} #Double check if needed here AND used.
         run: |
           echo "=== Analyzing Scan Results ==="
           SCAN_DIR="${{ env.CUSTOM_SCAN_DIR }}"
@@ -298,6 +308,10 @@ jobs:
                             report_finding "Secret (Trivy)" "$FILEPATH" "$SEVERITY" "$TITLE"
                           fi
                         done < <(echo "$result" | jq -c '.Secrets[]?' 2>/dev/null)
+                        # Example of using UPLOAD_URL
+                        echo "Uploading results to $UPLOAD_URL" #<---EXAMPLE USE OF SECRET
+                        curl -X POST -H "Content-Type: application/json" -d @/tmp/scan_results.json "$UPLOAD_URL" #<---EXAMPLE
+
                       fi
                     done < <(jq -c '.Results[]? | select(.Secrets != null)' "$RESULT_FILE" 2>/dev/null)
                   else
@@ -344,4 +358,5 @@ jobs:
           TOTAL_VIOLATIONS=$((CRITICAL_VIOLATIONS + HIGH_VIOLATIONS))
           echo "Found $TOTAL_VIOLATIONS violation(s):"
           echo "Critical Violations (including HIGH severity secrets): $CRITICAL_VIOLATIONS"
-          echo "Other High Violations: $HIGH_VIOLATI
+          echo "Other High Violations: $HIGH_VIOLATIONS"
+
