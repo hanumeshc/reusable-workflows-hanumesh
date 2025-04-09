@@ -165,10 +165,10 @@ jobs:
             --trivy-scanners=codelicensescan,codesecretscan,sbom,imagelicensescan,imagesecretscan \
             --artifact-type="image" \
             --artifact-name="$IMAGE_NAME" \
-            --artifact-tag="$IMAGE_TAG" \            
+            --artifact-tag="$IMAGE_TAG" \
             --upload-url="https://march-qa.oea-dev.opsmx.net" \
-            --ssd-token="${SSD_TEAM_TOKEN}" \             
-            --source-code-path="$GITHUB_WORKSPACE" \           
+            --ssd-token="${SSD_TEAM_TOKEN}" \
+            --source-code-path="$GITHUB_WORKSPACE" \
             --repository-url="https://github.com/${{ github.repository }}" \
             --branch="${{ github.ref_name }}" \
             --build-id="${{ github.run_id }}" \
