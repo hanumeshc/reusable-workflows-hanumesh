@@ -145,7 +145,7 @@ jobs:
 
       - name: Build Docker Image
         run: |
-          docker build -t ""${{ inputs.registry }}/hanumeshc/${{ inputs.image_name }}:${{ inputs.image_tag }}" \
+          docker build -t "${{ inputs.registry }}/hanumeshc/${{ inputs.image_name }}:${{ inputs.image_tag }}" \
           -f "${{ inputs.dockerfile }}" "${{ inputs.context }}"
 
       - name: Push Image to Docker hub
