@@ -139,23 +139,41 @@ jobs:
           echo "REPORT_DIR=$REPORT_DIR" >> $GITHUB_ENV
           echo "LOG_DIR=$LOG_DIR" >> $GITHUB_ENV
 
+      - name: Log in to Docker registry
+        run: |
+          echo "${{ secrets.DOCKER_PUBLIC_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_PUBLIC_USERNAME }}" --password-stdin "${{ inputs.registry }}"
+
+      - name: Build Docker Image
+        run: |
+
+          docker build -t ""${{ inputs.registry }}/hanumeshc/${{ inputs.image_name }}:${{ inputs.image_tag }}" \
+          -f "${{ inputs.dockerfile }}" "${{ inputs.context }}"
+
+      - name: Push Image to Docker hub
+        run: |
+          docker push "${{ inputs.registry }}/hanumeshc/${{ inputs.image_name }}:${{ inputs.image_tag }}"
+          
+
       # Run Source Code Scans with SSD Scanner CLI
       - name: Run Source Code Scans
         env:
-          SNYK_API_TOKEN: ${{ secrets.SNYK_API_TOKEN }}  #<--- ENSURE THIS IS USED LATER IN THIS STEP
           UPLOAD_URL: ${{ secrets.UPLOAD_URL }}        #<--- ENSURE THIS IS USED LATER IN THIS STEP
           SSD_TEAM_TOKEN: ${{ secrets.SSD_TEAM_TOKEN }}   #<--- ENSURE THIS IS USED LATER IN THIS STEP
         run: |
           echo "=== Running SOURCE CODE scans with SSD Scanner CLI ==="
           ssd-scanner-cli \
             --scanners=trivy,openssf,semgrep \
-            --trivy-scanners=codelicensescan,codesecretscan \
-            --artifact-type=file \
-            --source-code-path="$GITHUB_WORKSPACE" \
+            --trivy-scanners=codelicensescan,codesecretscan,sbom,imagelicensescan,imagesecretscan \
+            --artifact-type="image" \
+            --artifact-name="$IMAGE_NAME" \
+            --artifact-tag="$IMAGE_TAG" \            
+            --upload-url="${UPLOAD_URL}" \
+            --ssd-token="${SSD_TEAM_TOKEN}" \             
+            --source-code-path="$GITHUB_WORKSPACE" \           
             --repository-url="https://github.com/${{ github.repository }}" \
             --branch="${{ github.ref_name }}" \
             --build-id="${{ github.run_id }}" \
-            --offline-mode=true \
+            --offline-mode=false \
             --keep-results=true \
             --debug=true > ${{ env.LOG_DIR }}/source-code-scan.log 2>&1
           echo "=== SSD Scanner CLI Log (last 100 lines) ==="
@@ -207,6 +225,33 @@ jobs:
           find "${{ env.DEFAULT_SCAN_DIR }}" -type f | sort || echo "No files found in default scan directory"
           echo "Results count: $(find "${{ env.DEFAULT_SCAN_DIR }}" -type f | wc -l)"
 
+      # Step: Send Build Event to SSD
+      - name: Send Build Event to SSD
+        env:
+          SSD_URL: ${{ secrets.UPLOAD_URL }}
+        run: |
+          curl --location -v "https://march-qa.oea-dev.opsmx.net/webhook/v1/ssd" \
+               --header "Content-Type: application/json" \
+               --data '{
+                 "jobname": "${{ github.workflow }}",
+                 "buildnumber": "${{ github.run_number }}",
+                 "joburl": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+                 "gitcommit": "${{ github.sha }}",
+                 "builduser": "${{ github.actor }}",
+                 "giturl": "https://github.com/${{ github.repository }}",
+                 "gitbranch": "${{ github.ref_name }}",
+                 "artifacts": [
+                   {
+                      "image": "docker.io/hanumeshc/multiartifact-alpine2:alpine2-14352083198",
+                      "service": "alpine"
+                  },
+                  {
+                      "image": "quay.io/opsmxpublic/mobsf:2024-12-00",
+                      "service": "mobsf"
+                  }                  
+                 ]
+               }'
+               
       # Example: Construct RabbitMQ URL (if needed for notification)
       - name: Construct RabbitMQ URL  #<--- IF YOU NEED THIS, UNCOMMENT AND ADAPT
         run: |
