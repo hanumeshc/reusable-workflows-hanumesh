@@ -224,39 +224,80 @@ jobs:
           find "${{ env.DEFAULT_SCAN_DIR }}" -type f | sort || echo "No files found in default scan directory"
           echo "Results count: $(find "${{ env.DEFAULT_SCAN_DIR }}" -type f | wc -l)"
 
-      # Step: Send Build Event to SSD
-      - name: Send Build Event to SSD
-        env:
-          SSD_URL: ${{ secrets.UPLOAD_URL }}
+      # Create RabbitMQ Exchange and Queue, and Bind them
+      - name: Create RabbitMQ Exchange and Queue
         run: |
-          curl --location -v "https://march-qa.oea-dev.opsmx.net/webhook/v1/ssd" \
-               --header "Content-Type: application/json" \
-               --data '{
-                 "jobname": "${{ github.workflow }}",
-                 "buildnumber": "${{ github.run_number }}",
-                 "joburl": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-                 "gitcommit": "${{ github.sha }}",
-                 "builduser": "${{ github.actor }}",
-                 "giturl": "https://github.com/${{ github.repository }}",
-                 "gitbranch": "${{ github.ref_name }}",
-                 "artifacts": [
-                   {
-                      "image": "docker.io/hanumeshc/multiartifact-alpine1:alpine1-hanumesh1",
-                      "service": "alpine"
-                  },
-                  {
-                      "image": "docker.io/hanumeshc/multiartifact-alpine1:alpine1-hanumesh2",
-                      "service": "alpine"
-                  }                  
-                 ]
-               }'
-               
-      # Example: Construct RabbitMQ URL (if needed for notification)
-      - name: Construct RabbitMQ URL  #<--- IF YOU NEED THIS, UNCOMMENT AND ADAPT
+          # Create the exchange
+          curl -u ${{ secrets.RABBITMQ_USER }}:${{ secrets.RABBITMQ_PASS }} \
+              -H "Content-Type: application/json" \
+              -X PUT "${{ inputs.rabbitmq_url }}/api/exchanges/%2F/${{ inputs.rabbitmq_exchange }}" \
+              -d '{"type":"direct","durable":true}'
+
+          # Create the queue
+          curl -u ${{ secrets.RABBITMQ_USER }}:${{ secrets.RABBITMQ_PASS }} \
+              -H "Content-Type: application/json" \
+              -X PUT "${{ inputs.rabbitmq_url }}/api/queues/%2F/${{ inputs.rabbitmq_queue }}" \
+              -d '{"durable":true}'
+
+          # Bind the queue to the exchange with the binding key
+          curl -u ${{ secrets.RABBITMQ_USER }}:${{ secrets.RABBITMQ_PASS }} \
+              -H "Content-Type: application/json" \
+              -X POST "${{ inputs.rabbitmq_url }}/api/bindings/%2F/e/${{ inputs.rabbitmq_exchange }}/q/${{ inputs.rabbitmq_queue }}" \
+              -d '{"routing_key":"${{ inputs.rabbitmq_binding_key }}"}'
+
+      # Send Build Event to RabbitMQ
+      - name: Send Build Event to RabbitMQ
         run: |
-          RABBITMQ_URL="amqp://${{ secrets.RABBITMQ_USER }}:${{ secrets.RABBITMQ_PASS }}@${{ inputs.rabbitmq_url }}" #<---EXAMPLE
-          echo "RabbitMQ URL: $RABBITMQ_URL" #DEBUG
-          echo "RABBITMQ_URL=$RABBITMQ_URL" >> $GITHUB_ENV #SET ENV VAR IF NEEDED
+          # Prepare message for RabbitMQ
+          MESSAGE=$(jq -n \
+            --arg type "com.jenkins.build.finished" \
+            --argjson data "$(jq -n \
+              --argjson IMAGE '["docker.io/hanumeshc/multiartifact-alpine1:alpine1-hanumesh1", "docker.io/hanumeshc/multiartifact-alpine1:alpine1-hanumesh2"]' \
+              --arg JOB_NAME "${{ github.workflow }}" \
+              --arg BUILD_NUMBER "${{ github.run_number }}" \
+              --arg GIT_URL "https://github.com/${{ github.repository }}" \
+              --arg GIT_COMMIT "${{ github.sha }}" \
+              --arg GIT_BRANCH "${{ github.ref_name }}" \
+              --arg JOB_URL "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+              --arg BUILD_TIME "$(date +%s%3N)" \
+              --arg BUILD_USER "${{ github.actor }}" \
+              --arg ORGANIZATION "${{ inputs.org }}" \
+              --argjson APPLICATION_TAGS "$(echo "${{ inputs.application_tags }}" | jq -R -s 'split(",") | map(select(. != ""))')" \
+              '{
+                "IMAGE": $IMAGE,
+                "JOB_NAME": $JOB_NAME,
+                "BUILD_NUMBER": $BUILD_NUMBER,
+                "GIT_URL": $GIT_URL,
+                "GIT_COMMIT": $GIT_COMMIT,
+                "GIT_BRANCH": $GIT_BRANCH,
+                "JOB_URL": $JOB_URL,
+                "BUILD_TIME": $BUILD_TIME,
+                "BUILD_USER": $BUILD_USER,
+                "ORGANIZATION": $ORGANIZATION,
+                "APPLICATION_TAGS": $APPLICATION_TAGS
+              }'
+            )" \
+            '{type: $type, data: $data | tostring}'
+          )
+          
+          # Create payload for RabbitMQ API
+          PAYLOAD=$(jq -n --arg vhost "/" \
+                          --arg name "${{ inputs.rabbitmq_exchange }}" \
+                          --argjson properties '{}' \
+                          --arg routing_key "${{ inputs.rabbitmq_binding_key }}" \
+                          --arg delivery_mode "2" \
+                          --arg payload "$MESSAGE" \
+                          --arg payload_encoding "string" \
+                          '{vhost: $vhost, name: $name, properties: $properties, routing_key: $routing_key, delivery_mode: $delivery_mode, payload: $payload, payload_encoding: $payload_encoding}')
+          
+          echo "Sending message to RabbitMQ..."
+          
+          # Send the message to RabbitMQ
+          curl -s -u ${{ secrets.RABBITMQ_USER }}:${{ secrets.RABBITMQ_PASS }} \
+              -H "Content-Type: application/json" \
+              -X POST "${{ inputs.rabbitmq_url }}/api/exchanges/%2F/${{ inputs.rabbitmq_exchange }}/publish" \
+              --data-binary "$PAYLOAD" || { echo "Failed to send message"; exit 1; }
+
 
       # Analyze scan results (EXAMPLE USAGE of UPLOAD_URL)
       - name: Analyze scan results  #<---EXAMPLE USAGE
@@ -409,4 +450,3 @@ jobs:
           echo "Found $TOTAL_VIOLATIONS violation(s):"
           echo "Critical Violations (including HIGH severity secrets): $CRITICAL_VIOLATIONS"
           echo "Other High Violations: $HIGH_VIOLATIONS"
-
