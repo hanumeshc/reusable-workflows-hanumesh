@@ -248,37 +248,55 @@ jobs:
       # Send Build Event to RabbitMQ
       - name: Send Build Event to RabbitMQ
         run: |
-          # Prepare message for RabbitMQ
+          # Get the full image with registry and tag
+          FULL_IMAGE="${{ inputs.registry }}/hanumeshc/${{ inputs.image_name }}:${{ inputs.image_tag }}"
+          
+          # Get the image digest
+          IMAGE_SHA=$(docker inspect --format='{{index .RepoDigests 0}}' "$FULL_IMAGE" | cut -d':' -f2 || echo "sha256:unknown")
+          
+          # Prepare message for RabbitMQ - with proper case and data types for the GitHub Actions plugin
           MESSAGE=$(jq -n \
-            --arg type "com.jenkins.build.finished" \
+            --arg type "com.github.build.finished" \
             --argjson data "$(jq -n \
-              --argjson IMAGE '["docker.io/hanumeshc/multiartifact-alpine1:alpine1-hanumesh1", "docker.io/hanumeshc/multiartifact-alpine1:alpine1-hanumesh2"]' \
-              --arg JOB_NAME "${{ github.workflow }}" \
-              --arg BUILD_NUMBER "${{ github.run_number }}" \
-              --arg GIT_URL "https://github.com/${{ github.repository }}" \
-              --arg GIT_COMMIT "${{ github.sha }}" \
-              --arg GIT_BRANCH "${{ github.ref_name }}" \
-              --arg JOB_URL "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-              --arg BUILD_TIME "$(date +%s%3N)" \
-              --arg BUILD_USER "${{ github.actor }}" \
-              --arg ORGANIZATION "${{ inputs.org }}" \
-              --argjson APPLICATION_TAGS "$(echo "${{ inputs.application_tags }}" | jq -R -s 'split(",") | map(select(. != ""))')" \
+              --arg image "$FULL_IMAGE" \
+              --arg imageTag "${{ inputs.image_tag }}" \
+              --arg imgsha "$IMAGE_SHA" \
+              --argjson artifacts '[]' \
+              --arg jobId "${{ github.workflow }}" \
+              --arg buildNumber "${{ github.run_number }}" \
+              --arg gitUrl "https://github.com/${{ github.repository }}" \
+              --arg gitCommit "${{ github.sha }}" \
+              --arg gitBranch "${{ github.ref_name }}" \
+              --arg jobUrl "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+              --arg buildTime "$(date +%s%3N)" \
+              --arg buildUser "${{ github.actor }}" \
+              --arg organization "${{ inputs.org }}" \
+              --arg workflowName "GitHub Actions Workflow" \
+              --argjson applicationTags "$(echo "${{ inputs.application_tags }}" | jq -R -s 'split(",") | map(select(. != ""))')" \
               '{
-                "IMAGE": $IMAGE,
-                "JOB_NAME": $JOB_NAME,
-                "BUILD_NUMBER": $BUILD_NUMBER,
-                "GIT_URL": $GIT_URL,
-                "GIT_COMMIT": $GIT_COMMIT,
-                "GIT_BRANCH": $GIT_BRANCH,
-                "JOB_URL": $JOB_URL,
-                "BUILD_TIME": $BUILD_TIME,
-                "BUILD_USER": $BUILD_USER,
-                "ORGANIZATION": $ORGANIZATION,
-                "APPLICATION_TAGS": $APPLICATION_TAGS
+                "image": $image,
+                "imageTag": $imageTag,
+                "imgsha": $imgsha,
+                "artifacts": $artifacts,
+                "jobId": $jobId,
+                "buildNumber": $buildNumber,
+                "gitUrl": $gitUrl,
+                "gitCommit": $gitCommit,
+                "gitBranch": $gitBranch,
+                "jobUrl": $jobUrl,
+                "buildTime": $buildTime,
+                "buildUser": $buildUser,
+                "organization": $organization,
+                "workflowName": $workflowName,
+                "applicationTags": $applicationTags
               }'
             )" \
             '{type: $type, data: $data | tostring}'
           )
+          
+          # Debug: Output the formatted message
+          echo "Message structure:"
+          echo "$MESSAGE" | jq '.'
           
           # Create payload for RabbitMQ API
           PAYLOAD=$(jq -n --arg vhost "/" \
