@@ -31,11 +31,17 @@ on:
         type: string
         default: "v1.0"
     secrets:
-      JFROG_USERNAME:
-        description: "JFrog username"
+      DOCKER_PUBLIC_USERNAME:
+        description: 'Docker Hub username'
         required: true
-      JFROG_PASSWORD:
-        description: "JFrog password"
+      DOCKER_PUBLIC_PASSWORD:
+        description: 'Docker Hub password'
+        required: true
+      RABBITMQ_USER:
+        description: 'RabbitMQ user'
+        required: true
+      RABBITMQ_PASS:
+        description: 'RabbitMQ password'
         required: true
       SNYK_API_TOKEN:
         description: "Snyk API token"
