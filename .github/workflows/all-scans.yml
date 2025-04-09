@@ -241,12 +241,12 @@ jobs:
                  "gitbranch": "${{ github.ref_name }}",
                  "artifacts": [
                    {
-                      "image": "docker.io/hanumeshc/multiartifact-alpine2:alpine2-14352083198",
+                      "image": "docker.io/hanumeshc/multiartifact-alpine1:alpine1-hanumesh1",
                       "service": "alpine"
                   },
                   {
-                      "image": "quay.io/opsmxpublic/mobsf:2024-12-00",
-                      "service": "mobsf"
+                      "image": "docker.io/hanumeshc/multiartifact-alpine1:alpine1-hanumesh2",
+                      "service": "alpine"
                   }                  
                  ]
                }'
