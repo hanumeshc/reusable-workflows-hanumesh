@@ -1,4 +1,3 @@
-# .github/workflows/build-push-ssd-cli.yml
 name: Comprehensive Security Scan
 
 on:
@@ -19,7 +18,7 @@ on:
       repository:
         description: "Docker repository"
         required: true
-        type: string                      
+        type: string
       dockerfile:
         description: "Path to the Dockerfile"
         required: true
@@ -27,7 +26,7 @@ on:
       rabbitmq_url:
         description: "rabbitmq_url"
         required: true
-        type: string  
+        type: string
       rabbitmq_queue:
         description: "rabbitmq_queue"
         required: true
@@ -35,11 +34,11 @@ on:
       rabbitmq_exchange:
         description: "rabbitmq_exchange"
         required: true
-        type: string  
+        type: string
       rabbitmq_binding_key:
         description: "rabbitmq_binding_key"
         required: true
-        type: string                              
+        type: string
       context:
         description: "Build context directory"
         required: true
@@ -55,10 +54,10 @@ on:
         type: string
         default: "v1.0"
     secrets:
-      RABBITMQ_USER:
+      RABBITMQ_USER: # KEEP THIS IF IT'S USED
         description: 'RabbitMQ user'
         required: true
-      RABBITMQ_PASS:
+      RABBITMQ_PASS: # KEEP THIS IF IT'S USED
         description: 'RabbitMQ password'
         required: true
       SNYK_API_TOKEN:
@@ -138,9 +137,9 @@ jobs:
       # Run Source Code Scans with SSD Scanner CLI
       - name: Run Source Code Scans
         env:
-          SNYK_API_TOKEN: ${{ secrets.SNYK_API_TOKEN }}
-          UPLOAD_URL: ${{ secrets.UPLOAD_URL }}
-          SSD_TEAM_TOKEN: ${{ secrets.SSD_TEAM_TOKEN }}
+          SNYK_API_TOKEN: ${{ secrets.SNYK_API_TOKEN }} # Make sure this is actually used!
+          UPLOAD_URL: ${{ secrets.UPLOAD_URL }}       # Make sure this is actually used!
+          SSD_TEAM_TOKEN: ${{ secrets.SSD_TEAM_TOKEN }}  # Make sure this is actually used!
         run: |
           echo "=== Running SOURCE CODE scans with SSD Scanner CLI ==="
           ssd-scanner-cli \
@@ -201,9 +200,7 @@ jobs:
           echo "Results count: $(find "${{ env.CUSTOM_SCAN_DIR }}" -type f | wc -l)"
           echo "Default scan directory contents:"
           find "${{ env.DEFAULT_SCAN_DIR }}" -type f | sort || echo "No files found in default scan directory"
-          echo "Results count: $(find "${{ env.DEFAULT_SCAN_DIR }}" -type f | wc -l)"
-
-      # Analyze scan results
+          echo "Results count: $(find "${{ env.DEFAULT_SCAN_DIR }}" -type f | wc -l)"... # Analyze scan results
       - name: Analyze scan results
         if: always()
         run: |
