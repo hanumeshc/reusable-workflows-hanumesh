@@ -8,17 +8,41 @@ on:
         description: "Name of the Docker image (e.g., alpine1)"
         required: true
         type: string
-      dockerfile_path:
+      image_tag:
+        description: "Name of the Docker tage"
+        required: true
+        type: string
+      registry:
+        description: "Docker registry"
+        required: true
+        type: string
+      repository:
+        description: "Docker repository"
+        required: true
+        type: string                      
+      dockerfile:
         description: "Path to the Dockerfile"
         required: true
         type: string
-      jfrog_repo_url:
-        description: "JFrog Artifactory repository URL"
+      rabbitmq_url:
+        description: "rabbitmq_url"
+        required: true
+        type: string  
+      rabbitmq_queue:
+        description: "rabbitmq_queue"
         required: true
         type: string
+      rabbitmq_exchange:
+        description: "rabbitmq_exchange"
+        required: true
+        type: string  
+      rabbitmq_binding_key:
+        description: "rabbitmq_binding_key"
+        required: true
+        type: string                              
       context:
         description: "Build context directory"
-        required: false
+        required: true
         type: string
         default: "."
       org:
