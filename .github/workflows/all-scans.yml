@@ -1,4 +1,4 @@
-name: Comprehensive Security Scan
+name: Comprehensive Build and Push
 
 on:
   workflow_call:
@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       image_tag:
-        description: "Name of the Docker tage"
+        description: "Name of the Docker tag"
         required: true
         type: string
       registry:
@@ -53,6 +53,11 @@ on:
         required: false
         type: string
         default: "v1.0"
+      sourceCodePath:
+        description: "Path to the source code"
+        required: false
+        type: string
+        default: ""
     secrets:
       DOCKER_PUBLIC_USERNAME:
         description: 'Docker Hub username'
@@ -66,78 +71,17 @@ on:
       RABBITMQ_PASS:
         description: 'RabbitMQ password'
         required: true
-      SNYK_API_TOKEN:
-        description: "Snyk API token"
-        required: true
-      UPLOAD_URL:
-        description: "URL to upload scan results"
-        required: true
-      SSD_TEAM_TOKEN:
-        description: "SSD team token"
-        required: true
 
 jobs:
-  build-and-scan:
+  build-and-push:
     runs-on: ubuntu-latest
 
     steps:
       # Checkout repository code
       - name: Checkout repository code
         uses: actions/checkout@v3
-
-      # Set up Python (for semgrep installation)
-      - name: Set up Python
-        uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
-
-      # Install Semgrep directly
-      - name: Install Semgrep
-        run: |
-          pip install semgrep==1.50.0
-          semgrep --version
-
-      # Download SSD Scanner CLI with specific architecture
-      - name: Download SSD Scanner CLI
-        run: |
-          curl -L -o ssd-scanner-cli https://github.com/OpsMx/ssd-scanner-cli-public/releases/download/v0.0.50-alpha21/ssd-scanner-cli-amd64
-          chmod +x ssd-scanner-cli
-          sudo mv ssd-scanner-cli /usr/local/bin/
-
-      # Install other dependencies
-      - name: Install additional dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq bc
-
-      # Examine source code structure
-      - name: Examine source code structure
-        run: |
-          echo "=== Repository Structure ==="
-          find . -type f | grep -v "/.git/" | sort
-          if [ -f ".env" ]; then
-            echo ".env file found - will be scanned for secrets"
-            LINES=$(wc -l < .env)
-            echo ".env contains $LINES lines"
-            echo "Lines potentially containing secrets: $(grep -i -E 'key|secret|password|token|credential' .env | wc -l)"
-          else
-            echo ".env file not found"
-          fi
-          echo "=== Potential config/secret files ==="
-          find . -name "*.env*" -o -name "*.yaml" -o -name "*.yml" -o -name "*.conf" -o -name "*.config" -o -name "*.json" -o -name "*.properties" | grep -v "/.git/"
-
-      # Setup Scan Environment with custom persistent directories
-      - name: Setup Scan Environment
-        run: |
-          CUSTOM_SCAN_DIR="${GITHUB_WORKSPACE}/scan-results-dir"
-          REPORT_DIR="${GITHUB_WORKSPACE}/report-dir"
-          LOG_DIR="${GITHUB_WORKSPACE}/logs-dir"
-          mkdir -p "$CUSTOM_SCAN_DIR" "$REPORT_DIR" "$LOG_DIR"
-          chmod -R 777 "$CUSTOM_SCAN_DIR" "$REPORT_DIR" "$LOG_DIR"
-          echo "CUSTOM_SCAN_DIR=$CUSTOM_SCAN_DIR" >> $GITHUB_ENV
-          echo "DEFAULT_SCAN_DIR=/home/runner/.local/bin/ssd-scan-results" >> $GITHUB_ENV
-          echo "REPORT_DIR=$REPORT_DIR" >> $GITHUB_ENV
-          echo "LOG_DIR=$LOG_DIR" >> $GITHUB_ENV
+          fetch-depth: 2  # Fetch enough history to allow diffing with the previous commit
 
       - name: Log in to Docker registry
         run: |
@@ -151,18 +95,22 @@ jobs:
       - name: Push Image to Docker hub
         run: |
           docker push "${{ inputs.registry }}/hanumeshc/${{ inputs.image_name }}:${{ inputs.image_tag }}"
-          
 
-      # Debug check - verify preserved scan directory contents
-      - name: Verify scan results
+      - name: Pull the image to get the digest
+        run: docker pull "${{ inputs.registry }}/hanumeshc/${{ inputs.image_name }}:${{ inputs.image_tag }}"
+
+      - name: Get the image digest
+        run: echo "IMAGE_SHA=$(docker inspect --format='{{index .RepoDigests 0}}' "${{ inputs.registry }}/hanumeshc/${{ inputs.image_name }}:${{ inputs.image_tag }}" | cut -d':' -f2)" >> $GITHUB_ENV
+
+      - name: Get Repository Metadata
         run: |
-          echo "=== Verifying scan result preservation ==="
-          echo "Custom scan directory contents:"
-          find "${{ env.CUSTOM_SCAN_DIR }}" -type f | sort || echo "No files found in custom scan directory"
-          echo "Results count: $(find "${{ env.CUSTOM_SCAN_DIR }}" -type f | wc -l)"
-          echo "Default scan directory contents:"
-          find "${{ env.DEFAULT_SCAN_DIR }}" -type f | sort || echo "No files found in default scan directory"
-          echo "Results count: $(find "${{ env.DEFAULT_SCAN_DIR }}" -type f | wc -l)"
+          echo "Fetching repository metadata"
+          VISIBILITY=$(curl -s -H "Authorization: token ${{ github.token }}" https://api.github.com/repos/${{ github.repository }} | jq -r '.visibility')
+          PARENT_REPO=$(curl -s -H "Authorization: token ${{ github.token }}" https://api.github.com/repos/${{ github.repository }} | jq -r '.parent.full_name // empty')
+          LICENSE_NAME=$(curl -s -H "Authorization: token ${{ github.token }}" https://api.github.com/repos/${{ github.repository }} | jq -r '.license.spdx_id // empty')
+          echo "VISIBILITY=$VISIBILITY" >> $GITHUB_ENV
+          echo "PARENT_REPO=$PARENT_REPO" >> $GITHUB_ENV
+          echo "LICENSE_NAME=$LICENSE_NAME" >> $GITHUB_ENV
 
       # Create RabbitMQ Exchange and Queue, and Bind them
       - name: Create RabbitMQ Exchange and Queue
@@ -191,48 +139,66 @@ jobs:
           # Get the full image with registry and tag
           FULL_IMAGE="${{ inputs.registry }}/hanumeshc/${{ inputs.image_name }}:${{ inputs.image_tag }}"
           
-          # Get the image digest
-          IMAGE_SHA=$(docker inspect --format='{{index .RepoDigests 0}}' "$FULL_IMAGE" | cut -d':' -f2 || echo "sha256:unknown")
+          # Current timestamp in milliseconds
+          TIMESTAMP=$(date +%s000)
           
-          # Prepare message for RabbitMQ - with proper case and data types for the GitHub Actions plugin
+          # Process application tags properly
+          TAGS_JSON=$(echo "${{ inputs.application_tags }}" | tr -d '\n' | jq -R -s 'split(",") | map(select(. != ""))')
+          
+          # Create inner data JSON
+          INNER_DATA=$(jq -n \
+            --arg image "$FULL_IMAGE" \
+            --arg imageTag "${{ inputs.image_tag }}" \
+            --arg imgsha "${{ env.IMAGE_SHA }}" \
+            --argjson artifacts "[]" \
+            --argjson artifactoryUrl "[]" \
+            --arg jobId "${{ github.job }}" \
+            --arg buildNumber "${{ github.run_number }}" \
+            --arg gitUrl "https://github.com/${{ github.repository }}" \
+            --arg gitCommit "${{ github.sha }}" \
+            --arg gitBranch "${{ github.ref_name }}" \
+            --arg jobUrl "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --arg buildTime "${TIMESTAMP}" \
+            --arg buildUser "${{ github.actor }}" \
+            --arg diffCommits "" \
+            --arg visibility "${{ env.VISIBILITY }}" \
+            --arg parentRepo "${{ env.PARENT_REPO }}" \
+            --arg licenseName "${{ env.LICENSE_NAME }}" \
+            --arg organization "${{ inputs.org }}" \
+            --arg workflowName "${{ github.workflow }}" \
+            --argjson applicationTags "${TAGS_JSON}" \
+            --arg sourceCodePath "${{ inputs.sourceCodePath }}" \
+            --argjson helmChartData '{"chartName":"","chartVersion":"","helmRepository":""}' \
+            '{
+              image: $image,
+              imageTag: $imageTag,
+              imgsha: $imgsha,
+              artifacts: $artifacts,
+              artifactoryUrl: $artifactoryUrl,
+              jobId: $jobId,
+              buildNumber: $buildNumber,
+              gitUrl: $gitUrl,
+              gitCommit: $gitCommit,
+              gitBranch: $gitBranch,
+              jobUrl: $jobUrl,
+              buildTime: $buildTime,
+              buildUser: $buildUser,
+              diffCommits: $diffCommits,
+              visibility: $visibility,
+              parentRepo: $parentRepo,
+              licenseName: $licenseName,
+              organization: $organization,
+              workflowName: $workflowName,
+              applicationTags: $applicationTags,
+              sourceCodePath: $sourceCodePath,
+              helmChartData: $helmChartData
+            }')
+          
+          # Create the Event structure with the proper type
           MESSAGE=$(jq -n \
-            --arg type "com.github.build.finished" \
-            --argjson data "$(jq -n \
-              --arg image "$FULL_IMAGE" \
-              --arg imageTag "${{ inputs.image_tag }}" \
-              --arg imgsha "$IMAGE_SHA" \
-              --argjson artifacts '[]' \
-              --arg jobId "${{ github.workflow }}" \
-              --arg buildNumber "${{ github.run_number }}" \
-              --arg gitUrl "https://github.com/${{ github.repository }}" \
-              --arg gitCommit "${{ github.sha }}" \
-              --arg gitBranch "${{ github.ref_name }}" \
-              --arg jobUrl "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-              --arg buildTime "$(date +%s%3N)" \
-              --arg buildUser "${{ github.actor }}" \
-              --arg organization "${{ inputs.org }}" \
-              --arg workflowName "GitHub Actions Workflow" \
-              --argjson applicationTags "$(echo "${{ inputs.application_tags }}" | jq -R -s 'split(",") | map(select(. != ""))')" \
-              '{
-                "image": $image,
-                "imageTag": $imageTag,
-                "imgsha": $imgsha,
-                "artifacts": $artifacts,
-                "jobId": $jobId,
-                "buildNumber": $buildNumber,
-                "gitUrl": $gitUrl,
-                "gitCommit": $gitCommit,
-                "gitBranch": $gitBranch,
-                "jobUrl": $jobUrl,
-                "buildTime": $buildTime,
-                "buildUser": $buildUser,
-                "organization": $organization,
-                "workflowName": $workflowName,
-                "applicationTags": $applicationTags
-              }'
-            )" \
-            '{type: $type, data: $data | tostring}'
-          )
+            --arg type "build_event" \
+            --arg data "$INNER_DATA" \
+            '{type: $type, data: $data}')
           
           # Debug: Output the formatted message
           echo "Message structure:"
@@ -240,13 +206,13 @@ jobs:
           
           # Create payload for RabbitMQ API
           PAYLOAD=$(jq -n --arg vhost "/" \
-                          --arg name "${{ inputs.rabbitmq_exchange }}" \
-                          --argjson properties '{}' \
-                          --arg routing_key "${{ inputs.rabbitmq_binding_key }}" \
-                          --arg delivery_mode "2" \
-                          --arg payload "$MESSAGE" \
-                          --arg payload_encoding "string" \
-                          '{vhost: $vhost, name: $name, properties: $properties, routing_key: $routing_key, delivery_mode: $delivery_mode, payload: $payload, payload_encoding: $payload_encoding}')
+                        --arg name "${{ inputs.rabbitmq_exchange }}" \
+                        --argjson properties '{}' \
+                        --arg routing_key "${{ inputs.rabbitmq_binding_key }}" \
+                        --arg delivery_mode "2" \
+                        --arg payload "$MESSAGE" \
+                        --arg payload_encoding "string" \
+                        '{vhost: $vhost, name: $name, properties: $properties, routing_key: $routing_key, delivery_mode: $delivery_mode, payload: $payload, payload_encoding: $payload_encoding}')
           
           echo "Sending message to RabbitMQ..."
           
@@ -255,3 +221,5 @@ jobs:
               -H "Content-Type: application/json" \
               -X POST "${{ inputs.rabbitmq_url }}/api/exchanges/%2F/${{ inputs.rabbitmq_exchange }}/publish" \
               --data-binary "$PAYLOAD" || { echo "Failed to send message"; exit 1; }
+          
+          echo "Message sent successfully to RabbitMQ"
